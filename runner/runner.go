@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"regexp"
 	"os/exec"
+	"bufio"
+	"fmt"
 )
 
 // Composer.json top level
@@ -18,9 +20,14 @@ type Dependency struct {
 	Repo string
 }
 
-func FindDependenciesInFile(fileName string) (deps []Dependency) {
+func FindDependenciesInFile(fileName string) (deps []Dependency, err error) {
 	data, err := ioutil.ReadFile(fileName)
-	check(err)
+	if err != nil {
+		return deps, err
+	}
+
+	fmt.Printf("Composer file '%s' found\n", fileName)
+
 	dec := json.NewDecoder(bytes.NewReader(data))
 	var d Manifest
 	dec.Decode(&d)
@@ -29,6 +36,7 @@ func FindDependenciesInFile(fileName string) (deps []Dependency) {
 		pattern := "^dev\\-(.+)"
 		isMatch,_ := regexp.MatchString(pattern, v)
 		if isMatch {
+			fmt.Printf("Found dependency [library:'%s' - version:'%s']\n", k, v)
 			r, _ := regexp.Compile(pattern)
 			_ = r.FindStringSubmatch(v)
 			dependency := Dependency{
@@ -37,25 +45,32 @@ func FindDependenciesInFile(fileName string) (deps []Dependency) {
 			deps = append(deps, dependency)
 		}
 	}
-	return deps
+	return deps, err
 }
 
 func UpdateDependencies(deps []Dependency) (result bool, err error) {
-	args := []string{"update"}
+	//prepare command
+	args := []string{"update", "--no-interaction", "--no-suggest"}
 	for _, v := range deps {
 		args = append(args, v.Repo)
 	}
 	cmd := exec.Command("composer", args...)
-	_, err = cmd.Output()
-	result = true
-	if err != nil {
-		result = false
-	}
-	return result, err
-}
 
-func check(e error) {
-	if e != nil {
-		panic(e)
+	fmt.Printf("Running command: %s\n", cmd.Args)
+
+	//composer update uses Stderr for output
+	stderr, _ := cmd.StderrPipe()
+	cmd.Start()
+
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		m := scanner.Text()
+		fmt.Println(m)
 	}
+
+	if err := cmd.Wait(); err != nil {
+		fmt.Println("Command finished with error: %v", err)
+		return false, err
+	}
+	return true, err
 }
